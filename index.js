@@ -4,111 +4,129 @@
  * @property {number} time
  */
 
-module.exports = function PartyDeathMarkers(mod) {
-  let members = [];
-  let markers = [];
-  const dynamicTank = true;
-  let isRaid = false;
-  /**
-   * @type {Map<bigint, Date>}
-   */
-  const lastAgroAcquiredTime = new Map();
-  /**
-   * @type {AgroTime[]}
-   */
-  let agroTimeHistory = [];
-  const agroHistoryIntervalDelay = 5000;
-  const maxHistoryLength = 60;
-  // max time(ms) = maxHistoryLength * agroHistoryIntervalDelay(ms)
+class AgroHistory {
+  constructor() {
+    /**
+     * @type {Map<bigint, Date>}
+     */
+    this.lastAgroAcquiredTime = new Map();
+    /**
+     * @type {AgroTime[]}
+     */
+    this.agroTimeHistory = [];
+    this.isRaid = false;
+    this.intervalHandle = null;
 
-  function clear() {
-    removeAllMarkers();
-    members = [];
-    lastAgroAcquiredTime.clear();
-    agroTimeHistory = [];
-    isRaid = false;
+    // TODO: mod.settings?
+    this.agroHistoryInterval = 5000;
+    this.maxHistoryLength = 60;
+    // History Time(ms) = maxHistoryLength * agroHistoryInterval(ms)
   }
 
-  mod.game.on("enter_game", clear);
-  let handleTmp = null;
-  mod.game.on("enter_game", () => {
-    handleTmp = mod.setInterval(() => {
-      const now = new Date();
-      lastAgroAcquiredTime.forEach((value, key, map) => {
-        addAgroHistory(key, now - value);
-        map.set(key, now);
-      });
-      getDynamicTankId();
-    }, agroHistoryIntervalDelay);
-  });
-  mod.game.on("leave_game", () => {
-    if (handleTmp) mod.clearInterval(handleTmp);
-  });
+  clear(isRaid) {
+    this.lastAgroAcquiredTime.clear();
+    this.agroTimeHistory = [];
+    this.isRaid = isRaid || false;
+  }
 
-  mod.hook("S_USER_EFFECT", 1, (event) => {
-    if (![1, 2].includes(event.operation)) {
-      mod.warn(`Unknown aggro operation encountered: ${event.operation}`);
-      return;
-    }
-    if (![2, 3].includes(event.circle)) {
-      mod.warn(`Unknown aggro circle encountered: ${event.circle}`);
-      return;
-    }
-    const isAcquired = event.operation === 1;
-    const mainAgro = event.circle === 2;
-    if (!mainAgro) return;
+  add(target, isAcquired) {
     if (isAcquired) {
-      lastAgroAcquiredTime.set(event.target, new Date());
+      this.lastAgroAcquiredTime.set(target, new Date());
       return;
     }
-    const prev = lastAgroAcquiredTime.get(event.target);
-    lastAgroAcquiredTime.delete(event.target);
+    const prev = this.lastAgroAcquiredTime.get(target);
+    this.lastAgroAcquiredTime.delete(target);
     if (!prev) return;
-    addAgroHistory(event.target, new Date() - prev);
-  });
+    this.addHistory(target, new Date() - prev);
+  }
 
-  function addAgroHistory(gameId, time) {
-    const newLength = agroTimeHistory.push({ gameId, time });
-    if (newLength > maxHistoryLength) agroTimeHistory.shift();
+  addHistory(gameId, time) {
+    const newLength = this.agroTimeHistory.push({ gameId, time });
+    if (newLength > this.maxHistoryLength) this.agroTimeHistory.shift();
   }
 
   /**
    * @returns {bigint | null}
    */
-  function getDynamicTankId() {
+  getDynamicTank() {
     /**
      * @type {Map.<bigint, number>}
      */
-    const cummulativeTime = agroTimeHistory.reduce(
+    // Sum agro time by gameId
+    const cummulativeTime = this.agroTimeHistory.reduce(
       (acc, cur) => acc.set(cur.gameId, (acc.get(cur.gameId) || 0) + cur.time),
       new Map()
     );
     const cummulativeTimeEntries = Array.from(cummulativeTime.entries());
-    // mod.log("agroTimeHistory", agroTimeHistory);
-    // mod.log("cummulativeTime", cummulativeTimeEntries);
-    // const niceLog = Object.fromEntries(cummulativeTimeEntries.map(([gameId, time]) => [mapName.get(gameId), time]));
-    // mod.log("niceLog", niceLog);
     // Select gameId key correspoding to max time value
-    const maxCummulative = cummulativeTimeEntries.reduce(
+    const maxCummulativeId = cummulativeTimeEntries.reduce(
       (max, entry) => (entry[1] > max[1] ? entry : max),
       [null, -Infinity]
     )[0];
-    // mod.log("mapName", mapName);
-    // mod.log("maxCummulative", maxCummulative, mapName.get(maxCummulative), mod.game.me.is(maxCummulative));
-    return maxCummulative;
+    return maxCummulativeId;
   }
 
-  // let mapName = new Map();
-  // mod.game.on("enter_game", () => {
-  //   mapName.set(mod.game.me.gameId, mod.game.me.name);
-  //   mod.log("mapName enter_game", mapName);
-  // });
+  run(mod) {
+    this.intervalHandle = mod.setInterval(() => {
+      const now = new Date();
+      this.lastAgroAcquiredTime.forEach((value, key, map) => {
+        this.addHistory(key, now - value);
+        map.set(key, now);
+      });
+      this.getDynamicTank(mod);
+    }, this.agroHistoryInterval);
+  }
+
+  stop(mod) {
+    if (this.intervalHandle) mod.clearInterval(this.intervalHandle);
+  }
+}
+
+module.exports = function PartyDeathMarkers(mod) {
+  let members = [];
+  let markers = [];
+  // TODO: move to mod settings:
+  const dynamicTank = true;
+  const history = new AgroHistory();
+
+  function clear() {
+    removeAllMarkers();
+    members = [];
+    history.clear();
+  }
+
+  mod.game.on("enter_game", () => history.run(mod));
+  mod.game.on("leave_game", () => history.stop(mod));
+  mod.game.me.on("change_zone", () => history.clear());
+
+  const Operation = {
+    Acquired: 1,
+    Lost: 2,
+  };
+  const AgroType = {
+    Primary: 2,
+    Secondary: 3,
+  };
+  const PossibleOperations = Object.values(Operation);
+  const PossibleAgroTypes = Object.values(AgroType);
+  mod.hook("S_USER_EFFECT", 1, (event) => {
+    if (!PossibleOperations.includes(event.operation)) {
+      mod.warn(`Unknown aggro operation encountered: ${event.operation}. Valid are: ${PossibleOperations}`);
+      return;
+    }
+    if (!PossibleAgroTypes.includes(event.circle)) {
+      mod.warn(`Unknown aggro circle encountered: ${event.circle}. Valid are: ${PossibleAgroTypes}`);
+      return;
+    }
+    const isAcquired = event.operation === Operation.Acquired;
+    const isMainAgro = event.circle === AgroType.Primary;
+    if (!isMainAgro) return;
+    history.add(event.target, isAcquired);
+  });
+
   mod.hook("S_PARTY_MEMBER_LIST", 8, (event) => {
     members = event.members;
-    isRaid = event.raid;
-    // mapName = new Map(members.map((member) => [member.gameId, member.name]));
-    // mapName.set(mod.game.me.gameId, mod.game.me.name);
-    // mod.log("mapName S_PARTY_MEMBER_LIST", mapName);
+    history.clear(event.raid);
   });
 
   mod.hook("S_DEAD_LOCATION", 2, (event) => {
@@ -119,11 +137,12 @@ module.exports = function PartyDeathMarkers(mod) {
   });
 
   mod.hook("S_SPAWN_USER", 17, (event) => {
-    if (!event.alive)
-      spawnMarker(
-        members.find((member) => member.gameId === event.gameId),
-        event.loc
-      );
+    if (event.alive) return;
+
+    spawnMarker(
+      members.find((member) => member.gameId === event.gameId),
+      event.loc
+    );
   });
 
   mod.hook("S_PARTY_MEMBER_STAT_UPDATE", 3, (event) => {
@@ -186,11 +205,13 @@ module.exports = function PartyDeathMarkers(mod) {
     }
   }
 
-  const lancerIds = [1];
-  const healerIds = [6, 7];
-  const warriorIds = [0];
-  const berserkIds = [3];
-  const brawlerIds = [13];
+  const ClassId = {
+    Lancer: [1],
+    Healer: [6, 7],
+    Warrior: [0],
+    Berserk: [3],
+    Brawler: [13],
+  };
   /**
    *
    * @param {number} classId
@@ -198,33 +219,16 @@ module.exports = function PartyDeathMarkers(mod) {
    * @returns {"tank" | "healer" | "dps"}
    */
   function getRole(classId, gameId) {
-    if (lancerIds.includes(classId)) return "tank";
-    if (healerIds.includes(classId)) return "healer";
-    mod.log("getRole", getDynamicTankId() === gameId ? "tank" : "dps");
-    if (dynamicTank) return getDynamicTankId() === gameId ? "tank" : "dps";
+    // Clear roles:
+    if (ClassId.Lancer.includes(classId)) return "tank";
+    if (ClassId.Healer.includes(classId)) return "healer";
 
-    if (warriorIds.includes(classId)) {
-      // Defensive Stance I, II and not added III, IV abnormality
-      // [100200, 100201, 100202, 100203]
-      // Assault Stance I, II, III, IV abnormality
-      // [100100, 100101, 100102, 100103]
-      // Locked in Defensive Stance abnormality
-      // [102500]
-      // for (const id of [100200, 100201]) if (effect.hasAbnormality(id)) return "tank";
-    }
+    // Dynamic determination
+    // mod.log("getRole", history.getDynamicTank(mod) === gameId ? "tank" : "dps");
+    if (dynamicTank && !history.isRaid) return history.getDynamicTank(mod) === gameId ? "tank" : "dps";
 
-    if (berserkIds.includes(classId)) {
-      // Intimidation abnormality
-      // [401400]
-      // if (effect.hasAbnormality(401400)) return "tank";
-    }
-
-    if (brawlerIds.includes(classId)) {
-      // with Sensation of Power skill polishing
-      // does not work for other person
-      // if (this.__optionEffects[1104] === 17111802) return "tank";
-      // return "tank";
-    }
+    // Static determination:
+    if (ClassId.Brawler.includes(classId)) return "tank";
     return "dps";
   }
 
