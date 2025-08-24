@@ -23,10 +23,14 @@ class AgroHistory {
     // History Time(ms) = maxHistoryLength * agroHistoryInterval(ms)
   }
 
+  /**
+   *
+   * @param {boolean | undefined} isRaid
+   */
   clear(isRaid) {
     this.lastAgroAcquiredTime.clear();
     this.agroTimeHistory = [];
-    this.isRaid = isRaid || false;
+    if (isRaid !== undefined) this.isRaid = isRaid;
   }
 
   add(target, isAcquired) {
@@ -73,7 +77,6 @@ class AgroHistory {
         this.addHistory(key, now - value);
         map.set(key, now);
       });
-      this.getDynamicTank(mod);
     }, this.agroHistoryInterval);
   }
 
@@ -85,17 +88,12 @@ class AgroHistory {
 module.exports = function PartyDeathMarkers(mod) {
   let members = [];
   let markers = [];
-  // TODO: move to mod settings:
-  const dynamicTank = true;
   const history = new AgroHistory();
 
-  function clear() {
+  mod.game.on("enter_game", () => {
     removeAllMarkers();
-    members = [];
-    history.clear();
-  }
-
-  mod.game.on("enter_game", () => history.run(mod));
+    history.run(mod);
+  });
   mod.game.on("leave_game", () => history.stop(mod));
   mod.game.me.on("change_zone", () => history.clear());
 
@@ -157,10 +155,29 @@ module.exports = function PartyDeathMarkers(mod) {
   });
 
   mod.hook("S_LEAVE_PARTY", 1, () => {
-    clear();
+    removeAllMarkers();
+    members = [];
+    history.clear(false);
   });
 
+  mod.command.add(
+    ["death"],
+    {
+      show: () => {
+        mod.settings.enabled = !mod.settings.enabled;
+        mod.command.message(`Death markers was ${mod.settings.enabled ? "en" : "dis"}abled`);
+        if (!mod.settings.enabled) removeAllMarkers();
+      },
+      dynamic: () => {
+        mod.settings.dynamicTank = !mod.settings.dynamicTank;
+        mod.command.message(`Dynamic Tank determination was ${mod.settings.dynamicTank ? "en" : "dis"}abled`);
+      },
+    },
+    this
+  );
+
   function spawnMarker(member, loc) {
+    if (!mod.settings.enabled) return;
     if (!member || mod.game.me.is(member.gameId)) return;
 
     removeMarker(member);
@@ -224,8 +241,7 @@ module.exports = function PartyDeathMarkers(mod) {
     if (ClassId.Healer.includes(classId)) return "healer";
 
     // Dynamic determination
-    // mod.log("getRole", history.getDynamicTank(mod) === gameId ? "tank" : "dps");
-    if (dynamicTank && !history.isRaid) return history.getDynamicTank(mod) === gameId ? "tank" : "dps";
+    if (mod.settings.dynamicTank && !history.isRaid) return history.getDynamicTank(mod) === gameId ? "tank" : "dps";
 
     // Static determination:
     if (ClassId.Brawler.includes(classId)) return "tank";

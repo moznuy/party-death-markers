@@ -3,10 +3,13 @@
     "name": "party-death-markers",
     "author": "moznuy",
     "description": "Spawn beacons on top of dead party members.",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "options": {
       "cliName": "PartyDeathMarkers",
-      "guiName": "Party Death Markers"
+      "guiName": "Party Death Markers",
+      "settingsVersion": 1,
+      "settingsFile": "config.json",
+      "settingsMigrator": "settings_migrator.js"
     },
     "servers": [
         "https://raw.githubusercontent.com/moznuy/party-death-markers/master/"

@@ -1,8 +1,9 @@
 {
     "files": {
-        "index.js": "6e7b52f2565ad95595376da7b9d34d66d9d09be6bc03826b1fe56ada52c433fe",
-        "module.json": "1340cef8ae667b446507cd3f94a1357275277a3a4373dd34da79fce6268ca724",
-        "README.md": "7c398cbb5f570f718d9cf58eaebe6b7adf919f009e58b717bb4d354c8ef16af8"
+        "index.js": "f0c6d546b0efad2231d0497caa3121db07aaff6e66547711e91819184bb9eae6",
+        "module.json": "bb6a9c7b8b619bceb2a2fb9421447d19d56333bb619cf103cbcd8ed11e91db96",
+        "README.md": "429b9b10817c659b105a2b1f6cf0d23fc9eda6f225477878dacf8806bd67c02e",
+        "settings_migrator.js": "3ac96ae1c74fb48365b580476593a460e14cc4313a53ac59030a7e10dbffe823"
     },
     "defs": {
         "S_DEAD_LOCATION": 2,
