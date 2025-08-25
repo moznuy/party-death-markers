@@ -12,7 +12,7 @@
       "settingsMigrator": "settings_migrator.js"
     },
     "servers": [
-        "https://raw.githubusercontent.com/moznuy/party-death-markers/master/"
+        "https://raw.githubusercontent.com/moznuy/party-death-markers/dynamic-tank/"
     ],
     "supportUrl": "https://github.com/moznuy/party-death-markers/issues/"
 }

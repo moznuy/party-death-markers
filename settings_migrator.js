@@ -1,6 +1,7 @@
 const DefaultSettings = {
   enabled: true,
   dynamicTank: true,
+  debug: true,
 };
 
 module.exports = function MigrateSettings(from_ver, to_ver, settings) {

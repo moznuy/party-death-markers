@@ -4,8 +4,25 @@
  * @property {number} time
  */
 
+/**
+ * @typedef Member
+ * @property {number} serverId
+ * @property {number} playerId
+ * @property {number} level
+ * @property {number} class
+ * @property {bool} online
+ * @property {bigint} gameId
+ * @property {number} slot
+ * @property {bool} canInvite
+ * @property {number} laurel
+ * @property {number} awakeningLevel
+ * @property {string} name
+ */
+
 class AgroHistory {
-  constructor() {
+  constructor(mod, idToName) {
+    this.mod = mod;
+    this.idToName = idToName || new Map();
     /**
      * @type {Map<bigint, Date>}
      */
@@ -28,11 +45,18 @@ class AgroHistory {
    * @param {boolean | undefined} isRaid
    */
   clear(isRaid) {
+    if (this.mod.settings.debug) this.mod.log("Clear", isRaid);
     this.lastAgroAcquiredTime.clear();
     this.agroTimeHistory = [];
     if (isRaid !== undefined) this.isRaid = isRaid;
   }
 
+  /**
+   *
+   * @param {bigint} target
+   * @param {boolean} isAcquired
+   * @returns
+   */
   add(target, isAcquired) {
     if (isAcquired) {
       this.lastAgroAcquiredTime.set(target, new Date());
@@ -44,15 +68,37 @@ class AgroHistory {
     this.addHistory(target, new Date() - prev);
   }
 
+  /**
+   *
+   * @param {bigint} gameId
+   * @param {number} time
+   */
   addHistory(gameId, time) {
     const newLength = this.agroTimeHistory.push({ gameId, time });
     if (newLength > this.maxHistoryLength) this.agroTimeHistory.shift();
   }
 
   /**
+   * Clear lastAgroAcquiredTime for all who is not a boss target
+   * Fix for when there is no circle deagro event
+   * @param {bigint} gameId
+   */
+  clearOthers(gameId) {
+    if (this.mod.settings.debug) this.mod.log("clearOthers", gameId);
+    // Boss has no target
+    if (gameId === 0n) return;
+    this.lastAgroAcquiredTime.forEach((value, key, map) => {
+      if (key === gameId) return;
+
+      const removed = map.delete(key);
+      if (this.mod.settings.debug) this.mod.log("Found lost agro: ", key, this.idToName.get(key), removed);
+    });
+  }
+
+  /**
    * @returns {bigint | null}
    */
-  getDynamicTank() {
+  getDynamicTank(log) {
     /**
      * @type {Map.<bigint, number>}
      */
@@ -62,39 +108,79 @@ class AgroHistory {
       new Map()
     );
     const cummulativeTimeEntries = Array.from(cummulativeTime.entries());
+    if (this.mod.settings.debug) {
+      // mod.log("agroTimeHistory", this.agroTimeHistory);
+      if (cummulativeTimeEntries.length > 0) this.mod.log("cummulativeTime", cummulativeTimeEntries);
+      if (log && cummulativeTimeEntries.length > 0)
+        this.mod.command.message(`cummulativeTime: ${cummulativeTimeEntries}`);
+      const niceLog = Object.fromEntries(
+        cummulativeTimeEntries.map(([gameId, time]) => [this.idToName.get(gameId), time])
+      );
+      if (Object.keys(niceLog).length > 0) this.mod.log("niceLog", niceLog);
+    }
     // Select gameId key correspoding to max time value
     const maxCummulativeId = cummulativeTimeEntries.reduce(
       (max, entry) => (entry[1] > max[1] ? entry : max),
       [null, -Infinity]
     )[0];
+    if (this.mod.settings.debug) {
+      // this.mod.log("idToName", Array.from(this.idToName.values()));
+      this.mod.log(
+        "maxCummulative",
+        maxCummulativeId,
+        this.idToName.get(maxCummulativeId),
+        this.mod.game.me.is(maxCummulativeId)
+      );
+    }
     return maxCummulativeId;
   }
 
-  run(mod) {
-    this.intervalHandle = mod.setInterval(() => {
+  run() {
+    this.intervalHandle = this.mod.setInterval(() => {
       const now = new Date();
       this.lastAgroAcquiredTime.forEach((value, key, map) => {
         this.addHistory(key, now - value);
         map.set(key, now);
       });
+      // To debug log continuously
+      if (this.mod.settings.debug) this.getDynamicTank();
     }, this.agroHistoryInterval);
   }
 
-  stop(mod) {
-    if (this.intervalHandle) mod.clearInterval(this.intervalHandle);
+  stop() {
+    if (this.intervalHandle) this.mod.clearInterval(this.intervalHandle);
   }
 }
 
+const throttle = (mod, func, limit) => {
+  let inThrottle = false;
+  return (...args) => {
+    if (inThrottle) return;
+
+    func(...args);
+    inThrottle = true;
+    mod.setTimeout(() => (inThrottle = false), limit);
+  };
+};
+
 module.exports = function PartyDeathMarkers(mod) {
+  /**
+   * @type {Member[]}
+   */
   let members = [];
+  /**
+   * @type {number[]}
+   */
   let markers = [];
-  const history = new AgroHistory();
+
+  const idToName = new Map();
+  const history = new AgroHistory(mod, idToName);
 
   mod.game.on("enter_game", () => {
     removeAllMarkers();
-    history.run(mod);
+    history.run();
   });
-  mod.game.on("leave_game", () => history.stop(mod));
+  mod.game.on("leave_game", () => history.stop());
   mod.game.me.on("change_zone", () => history.clear());
 
   const Operation = {
@@ -122,9 +208,18 @@ module.exports = function PartyDeathMarkers(mod) {
     history.add(event.target, isAcquired);
   });
 
+  mod.hook(
+    "S_BOSS_GAGE_INFO",
+    3,
+    throttle(mod, (event) => history.clearOthers(event.target), 1000)
+  );
+
   mod.hook("S_PARTY_MEMBER_LIST", 8, (event) => {
     members = event.members;
     history.clear(event.raid);
+    idToName.clear();
+    idToName.set(mod.game.me.gameId, mod.game.me.name);
+    members.forEach((member) => idToName.set(member.gameId, member.name));
   });
 
   mod.hook("S_DEAD_LOCATION", 2, (event) => {
@@ -172,10 +267,19 @@ module.exports = function PartyDeathMarkers(mod) {
         mod.settings.dynamicTank = !mod.settings.dynamicTank;
         mod.command.message(`Dynamic Tank determination was ${mod.settings.dynamicTank ? "en" : "dis"}abled`);
       },
+      debug: () => {
+        mod.settings.debug = !mod.settings.debug;
+        mod.command.message(`Debug Dynamic Tank determination was ${mod.settings.debug ? "en" : "dis"}abled`);
+      },
     },
     this
   );
 
+  /**
+   *
+   * @param {Member} member
+   * @param {any} loc
+   */
   function spawnMarker(member, loc) {
     if (!mod.settings.enabled) return;
     if (!member || mod.game.me.is(member.gameId)) return;
@@ -186,7 +290,7 @@ module.exports = function PartyDeathMarkers(mod) {
     mod.toClient("S_SPAWN_DROPITEM", 9, {
       gameId: member.playerId,
       loc: loc,
-      item: getMarker(getRole(member.class, member.gameId)),
+      item: getMarker(getRole(member)),
       amount: 1,
       expiry: 999999,
       owners: [mod.game.me.playerId],
@@ -231,23 +335,35 @@ module.exports = function PartyDeathMarkers(mod) {
   };
   /**
    *
-   * @param {number} classId
-   * @param {bigint} gameId
+   * @param {Member} member
    * @returns {"tank" | "healer" | "dps"}
    */
-  function getRole(classId, gameId) {
+  function getRole(member) {
+    const tankId = history.getDynamicTank(true);
+    if (mod.settings.debug)
+      mod.command.message(
+        `Tank: ${tankId} ${idToName.get(tankId)}; dead: ${member.gameId} ${idToName.get(member.gameId)}; ${
+          tankId === member.gameId
+        }`
+      );
+
     // Clear roles:
-    if (ClassId.Lancer.includes(classId)) return "tank";
-    if (ClassId.Healer.includes(classId)) return "healer";
+    if (ClassId.Lancer.includes(member.class)) return "tank";
+    if (ClassId.Healer.includes(member.class)) return "healer";
 
     // Dynamic determination
-    if (mod.settings.dynamicTank && !history.isRaid) return history.getDynamicTank(mod) === gameId ? "tank" : "dps";
+    if (mod.settings.dynamicTank && !history.isRaid) return tankId === member.gameId ? "tank" : "dps";
 
     // Static determination:
-    if (ClassId.Brawler.includes(classId)) return "tank";
+    if (ClassId.Brawler.includes(member.class)) return "tank";
     return "dps";
   }
 
+  /**
+   *
+   * @param {Member | undefined} member
+   * @returns
+   */
   function removeMarker(member) {
     if (!member) return;
 
