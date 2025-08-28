@@ -28,6 +28,10 @@ class AgroHistory {
      */
     this.lastAgroAcquiredTime = new Map();
     /**
+     * @type {bigint | null}
+     */
+    this.lastAgroId = null;
+    /**
      * @type {AgroTime[]}
      */
     this.agroTimeHistory = [];
@@ -47,6 +51,7 @@ class AgroHistory {
   clear(isRaid) {
     if (this.mod.settings.debug) this.mod.log("Clear", isRaid);
     this.lastAgroAcquiredTime.clear();
+    this.lastAgroId = null;
     this.agroTimeHistory = [];
     if (isRaid !== undefined) this.isRaid = isRaid;
   }
@@ -60,6 +65,7 @@ class AgroHistory {
   add(target, isAcquired) {
     if (isAcquired) {
       this.lastAgroAcquiredTime.set(target, new Date());
+      this.lastAgroId = target;
       return;
     }
     const prev = this.lastAgroAcquiredTime.get(target);
@@ -83,17 +89,17 @@ class AgroHistory {
    * Fix for when there is no circle deagro event
    * @param {bigint} gameId
    */
-  clearOthers(gameId) {
-    if (this.mod.settings.debug) this.mod.log("clearOthers", gameId);
-    // Boss has no target
-    if (gameId === 0n) return;
-    this.lastAgroAcquiredTime.forEach((value, key, map) => {
-      if (key === gameId) return;
+  // clearOthers(gameId) {
+  //   if (this.mod.settings.debug) this.mod.log("clearOthers", gameId);
+  //   // Boss has no target
+  //   if (gameId === 0n) return;
+  //   this.lastAgroAcquiredTime.forEach((value, key, map) => {
+  //     if (key === gameId) return;
 
-      const removed = map.delete(key);
-      if (this.mod.settings.debug) this.mod.log("Found lost agro: ", key, this.idToName.get(key), removed);
-    });
-  }
+  //     const removed = map.delete(key);
+  //     if (this.mod.settings.debug) this.mod.log("Found lost agro: ", key, this.idToName.get(key), removed);
+  //   });
+  // }
 
   /**
    * @returns {bigint | null}
@@ -139,6 +145,17 @@ class AgroHistory {
     this.intervalHandle = this.mod.setInterval(() => {
       const now = new Date();
       this.lastAgroAcquiredTime.forEach((value, key, map) => {
+        // Remove all except latest agro
+        // TODO: remove this.lastAgroId and get latest by .reduce
+        if (this.lastAgroId && this.lastAgroId !== key) {
+          map.delete(key);
+          if (this.mod.settings.debug) {
+            const msg = `Removing not latest agro: ${key} ${this.idToName.get(key)}`;
+            this.mod.log(msg);
+            this.mod.command.message(msg);
+          }
+          return;
+        }
         this.addHistory(key, now - value);
         map.set(key, now);
       });
@@ -179,6 +196,7 @@ module.exports = function PartyDeathMarkers(mod) {
   mod.game.on("enter_game", () => {
     removeAllMarkers();
     history.run();
+    idToName.set(mod.game.me.gameId, mod.game.me.name);
   });
   mod.game.on("leave_game", () => history.stop());
   mod.game.me.on("change_zone", () => history.clear());
@@ -208,11 +226,13 @@ module.exports = function PartyDeathMarkers(mod) {
     history.add(event.target, isAcquired);
   });
 
-  mod.hook(
-    "S_BOSS_GAGE_INFO",
-    3,
-    throttle(mod, (event) => history.clearOthers(event.target), 1000)
-  );
+  // TODO: figure out what to do with lost agro
+  // TODO: figure out what to do with bosses without primary agro indicator
+  // mod.hook(
+  //   "S_BOSS_GAGE_INFO",
+  //   3,
+  //   throttle(mod, (event) => history.clearOthers(event.target), 1000)
+  // );
 
   mod.hook("S_PARTY_MEMBER_LIST", 8, (event) => {
     members = event.members;
